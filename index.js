@@ -1,83 +1,96 @@
-// index.js
-require('dotenv').config();
-const fs = require('fs');
-const TelegramBot = require('node-telegram-bot-api');
+require("dotenv").config();
+const TelegramBot = require("node-telegram-bot-api");
+const express = require("express");
+const fs = require("fs");
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+const app = express();
+app.use(express.json());
+
+const TOKEN = process.env.TOKEN;
+const BASE_URL = process.env.BASE_URL;
 const ADMIN_ID = process.env.ADMIN_ID;
-const DATA_FILE = 'produk.json';
+const bot = new TelegramBot(TOKEN);
 
-function loadProduk() {
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE));
-  } catch (e) {
-    return [];
-  }
-}
+bot.setWebHook(`${BASE_URL}/bot${TOKEN}`);
 
-function saveProduk(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
+// DB sederhana pakai file JSON
+const loadProduk = () => JSON.parse(fs.readFileSync("produk.json", "utf-8"));
+const saveProduk = (data) => fs.writeFileSync("produk.json", JSON.stringify(data, null, 2));
 
+// Route webhook
+app.post(`/bot${TOKEN}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// Fungsi handle command
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id, 'Selamat datang! Ketik /beli untuk beli Akun CapCut Premium.');
+  bot.sendMessage(msg.chat.id, `Halo ${msg.from.first_name}! Ketik /menu untuk mulai.`);
 });
 
-bot.onText(/\/beli/, (msg) => {
-  const chatId = msg.chat.id;
-  const qr = 'https://dummyqris.link/qris.png';
-  bot.sendMessage(chatId, `Silakan bayar Rp 10000 ke QRIS berikut (dummy):\n${qr}\n\nKetik *Saya sudah bayar* jika sudah.`, {
-    parse_mode: 'Markdown'
-  });
-});
+bot.onText(/\/menu/, (msg) => {
+  const isAdmin = msg.from.id.toString() === ADMIN_ID;
+  let teks = "📦 Menu:\n- /produk = Lihat produk\n";
 
-bot.onText(/Saya sudah bayar/i, (msg) => {
-  const akun = {
-    email: 'dummycapcut@mail.com',
-    password: 'password123'
-  };
-  bot.sendMessage(msg.chat.id, `✅ *Pembayaran diterima!*\nBerikut akun CapCut kamu:\n\nEmail: ${akun.email}\nPassword: ${akun.password}`, {
-    parse_mode: 'Markdown'
-  });
-});
-
-bot.onText(/\/tambahproduk/, (msg) => {
-  if (msg.from.id.toString() !== ADMIN_ID) return;
-  bot.sendMessage(msg.chat.id, 'Kirim produk dengan format: `nama|stok`', { parse_mode: 'Markdown' });
-});
-
-bot.on('message', (msg) => {
-  if (msg.from.id.toString() !== ADMIN_ID) return;
-  if (msg.text && msg.text.includes('|')) {
-    const [nama, stok] = msg.text.split('|');
-    if (!nama || isNaN(stok)) return;
-    const produk = loadProduk();
-    produk.push({ nama: nama.trim(), stok: parseInt(stok) });
-    saveProduk(produk);
-    bot.sendMessage(msg.chat.id, `✅ Produk '${nama}' berhasil ditambahkan.`);
+  if (isAdmin) {
+    teks += "- /tambah = Tambah produk\n- /hapus = Hapus produk";
   }
+
+  bot.sendMessage(msg.chat.id, teks);
 });
 
-bot.onText(/\/stok/, (msg) => {
-  if (msg.from.id.toString() !== ADMIN_ID) return;
-  const produk = loadProduk();
-  let msgText = `*Stok Produk:*
-`;
-  produk.forEach((p, i) => {
-    msgText += `#${i + 1} ${p.nama} - ${p.stok} pcs\n`;
+bot.onText(/\/produk/, (msg) => {
+  const list = loadProduk();
+  if (list.length === 0) return bot.sendMessage(msg.chat.id, "Belum ada produk.");
+
+  let teks = "*📦 Stok Produk:*\n";
+  list.forEach((p, i) => {
+    teks += `${i + 1}. *${p.nama}* (${p.stok} stok)\n`;
   });
-  bot.sendMessage(msg.chat.id, msgText, { parse_mode: 'Markdown' });
+
+  bot.sendMessage(msg.chat.id, teks, { parse_mode: "Markdown" });
 });
 
-bot.onText(/\/hapusproduk (\d+)/, (msg, match) => {
+// Tambah produk (admin)
+bot.onText(/\/tambah/, (msg) => {
   if (msg.from.id.toString() !== ADMIN_ID) return;
-  const produk = loadProduk();
-  const index = parseInt(match[1]) - 1;
-  if (produk[index]) {
-    const removed = produk.splice(index, 1);
-    saveProduk(produk);
-    bot.sendMessage(msg.chat.id, `🗑️ Produk '${removed[0].nama}' dihapus.`);
-  } else {
-    bot.sendMessage(msg.chat.id, '❌ Produk tidak ditemukan.');
-  }
+
+  bot.sendMessage(msg.chat.id, "Format: nama|stok").then(() => {
+    bot.once("message", (res) => {
+      const [nama, stok] = res.text.split("|");
+      const data = loadProduk();
+      data.push({ nama, stok: parseInt(stok) });
+      saveProduk(data);
+      bot.sendMessage(msg.chat.id, "✅ Produk ditambahkan.");
+    });
+  });
+});
+
+// Hapus produk (admin)
+bot.onText(/\/hapus/, (msg) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+
+  const list = loadProduk();
+  let teks = "*Pilih produk yang ingin dihapus:*\n";
+  list.forEach((p, i) => {
+    teks += `${i + 1}. ${p.nama}\n`;
+  });
+
+  bot.sendMessage(msg.chat.id, teks, { parse_mode: "Markdown" }).then(() => {
+    bot.once("message", (res) => {
+      const idx = parseInt(res.text) - 1;
+      if (list[idx]) {
+        list.splice(idx, 1);
+        saveProduk(list);
+        bot.sendMessage(msg.chat.id, "❌ Produk dihapus.");
+      } else {
+        bot.sendMessage(msg.chat.id, "❌ Nomor tidak valid.");
+      }
+    });
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Bot jalan di port " + PORT);
 });
