@@ -1,96 +1,83 @@
+// index.js
 require('dotenv').config();
-const { Telegraf } = require('telegraf');
 const fs = require('fs');
-const express = require('express');
-const app = express();
+const TelegramBot = require('node-telegram-bot-api');
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 const ADMIN_ID = process.env.ADMIN_ID;
-const FILE_PATH = './produk.json';
+const DATA_FILE = 'produk.json';
 
-// Load produk
 function loadProduk() {
-    if (!fs.existsSync(FILE_PATH)) return {};
-    return JSON.parse(fs.readFileSync(FILE_PATH));
+  try {
+    return JSON.parse(fs.readFileSync(DATA_FILE));
+  } catch (e) {
+    return [];
+  }
 }
 
-// Simpan produk
 function saveProduk(data) {
-    fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2));
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
-// /start
-bot.start((ctx) => {
-    ctx.reply('Selamat datang! Ketik /me untuk melihat ID kamu.');
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id, 'Selamat datang! Ketik /beli untuk beli Akun CapCut Premium.');
 });
 
-// /me
-bot.command('me', (ctx) => {
-    ctx.reply(`ID Telegram kamu: ${ctx.from.id}`);
+bot.onText(/\/beli/, (msg) => {
+  const chatId = msg.chat.id;
+  const qr = 'https://dummyqris.link/qris.png';
+  bot.sendMessage(chatId, `Silakan bayar Rp 10000 ke QRIS berikut (dummy):\n${qr}\n\nKetik *Saya sudah bayar* jika sudah.`, {
+    parse_mode: 'Markdown'
+  });
 });
 
-// /tambahproduk NAMA HARGA
-bot.command('tambahproduk', (ctx) => {
-    if (ctx.from.id.toString() !== ADMIN_ID) return;
-    const [nama, harga] = ctx.message.text.split(' ').slice(1);
-    if (!nama || !harga) return ctx.reply('Format: /tambahproduk NAMA HARGA');
-    const data = loadProduk();
-    data[nama] = { harga: parseInt(harga), stok: [] };
-    saveProduk(data);
-    ctx.reply(`Produk ${nama} ditambahkan dengan harga Rp${harga}`);
+bot.onText(/Saya sudah bayar/i, (msg) => {
+  const akun = {
+    email: 'dummycapcut@mail.com',
+    password: 'password123'
+  };
+  bot.sendMessage(msg.chat.id, `✅ *Pembayaran diterima!*\nBerikut akun CapCut kamu:\n\nEmail: ${akun.email}\nPassword: ${akun.password}`, {
+    parse_mode: 'Markdown'
+  });
 });
 
-// /tambahakun NAMA\nemail|pass
-bot.command('tambahakun', (ctx) => {
-    if (ctx.from.id.toString() !== ADMIN_ID) return;
-    const lines = ctx.message.text.split('\n');
-    const [_, namaProduk] = lines[0].split(' ');
-    if (!namaProduk) return ctx.reply('Format: /tambahakun NAMA_PRODUK\nemail|pass');
-    const data = loadProduk();
-    if (!data[namaProduk]) return ctx.reply('Produk tidak ditemukan.');
-    const akunBaru = lines.slice(1).map(line => {
-        const [email, password] = line.split('|');
-        return { email, password, terpakai: false };
-    });
-    data[namaProduk].stok.push(...akunBaru);
-    saveProduk(data);
-    ctx.reply(`${akunBaru.length} akun ditambahkan ke ${namaProduk}`);
+bot.onText(/\/tambahproduk/, (msg) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  bot.sendMessage(msg.chat.id, 'Kirim produk dengan format: `nama|stok`', { parse_mode: 'Markdown' });
 });
 
-// /stok
-bot.command('stok', (ctx) => {
-    const data = loadProduk();
-    if (Object.keys(data).length === 0) return ctx.reply('Belum ada produk.');
-    let msg = '*Stok Produk:*
-';
-    for (const [nama, info] of Object.entries(data)) {
-        const sisa = info.stok.filter(a => !a.terpakai).length;
-        msg += `• ${nama} - ${sisa} akun tersedia - Rp${info.harga}
+bot.on('message', (msg) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  if (msg.text && msg.text.includes('|')) {
+    const [nama, stok] = msg.text.split('|');
+    if (!nama || isNaN(stok)) return;
+    const produk = loadProduk();
+    produk.push({ nama: nama.trim(), stok: parseInt(stok) });
+    saveProduk(produk);
+    bot.sendMessage(msg.chat.id, `✅ Produk '${nama}' berhasil ditambahkan.`);
+  }
+});
+
+bot.onText(/\/stok/, (msg) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const produk = loadProduk();
+  let msgText = `*Stok Produk:*
 `;
-    }
-    ctx.replyWithMarkdown(msg);
+  produk.forEach((p, i) => {
+    msgText += `#${i + 1} ${p.nama} - ${p.stok} pcs\n`;
+  });
+  bot.sendMessage(msg.chat.id, msgText, { parse_mode: 'Markdown' });
 });
 
-// /hapusproduk NAMA
-bot.command('hapusproduk', (ctx) => {
-    if (ctx.from.id.toString() !== ADMIN_ID) return;
-    const nama = ctx.message.text.split(' ')[1];
-    const data = loadProduk();
-    if (!data[nama]) return ctx.reply('Produk tidak ditemukan.');
-    delete data[nama];
-    saveProduk(data);
-    ctx.reply(`Produk ${nama} telah dihapus.`);
-});
-
-// Webhook
-app.use(express.json());
-app.post('/webhook', (req, res) => {
-    bot.handleUpdate(req.body);
-    res.sendStatus(200);
-});
-
-// Jalankan server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
+bot.onText(/\/hapusproduk (\d+)/, (msg, match) => {
+  if (msg.from.id.toString() !== ADMIN_ID) return;
+  const produk = loadProduk();
+  const index = parseInt(match[1]) - 1;
+  if (produk[index]) {
+    const removed = produk.splice(index, 1);
+    saveProduk(produk);
+    bot.sendMessage(msg.chat.id, `🗑️ Produk '${removed[0].nama}' dihapus.`);
+  } else {
+    bot.sendMessage(msg.chat.id, '❌ Produk tidak ditemukan.');
+  }
 });
